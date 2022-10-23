@@ -5226,6 +5226,28 @@ dependencies = [
 [[package]]
 name = "pallet-donations"
 version = "4.0.0-dev"
+dependencies = [
+ "frame-benchmarking 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "frame-support 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "frame-system 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "pallet-balances 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "pallet-transaction-payment 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "pallet-treasury 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "pallet-xcm 0.9.29",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core 6.0.0 (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "sp-io 6.0.0 (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "sp-runtime 6.0.0 (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "sp-std 4.0.0 (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
+ "xcm 0.9.29",
+ "xcm-builder 0.9.29",
+ "xcm-executor 0.9.29",
+]
+
+[[package]]
+name = "pallet-donations"
+version = "4.0.0-dev"
 source = "git+https://github.com/SequesterChain/pallets.git#544c25db0805a66be29d9ffcd91950bc0159a3de"
 dependencies = [
  "frame-benchmarking 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.18)",
@@ -6039,7 +6061,7 @@ dependencies = [
  "pallet-authorship",
  "pallet-balances 4.0.0-dev (git+https://github.com/paritytech/substrate?branch=polkadot-v0.9.29)",
  "pallet-collator-selection",
- "pallet-donations",
+ "pallet-donations 4.0.0-dev (git+https://github.com/SequesterChain/pallets.git)",
  "pallet-session",
  "pallet-sudo",
  "pallet-template",
