@@ -7,8 +7,10 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+mod weights;
 pub mod xcm_config;
 
+use cumulus_pallet_parachain_system::RelayNumberStrictlyIncreases;
 use pallet_donations::FeeCalculator;
 use pallet_treasury::BalanceOf;
 use smallvec::smallvec;
@@ -24,6 +26,7 @@ use sp_runtime::{
 	ApplyExtrinsicResult, MultiSignature, Percent,
 };
 
+use sp_std::boxed::Box;
 use sp_std::prelude::*;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
@@ -33,9 +36,8 @@ use frame_support::{
 	construct_runtime, parameter_types,
 	traits::Everything,
 	weights::{
-		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_PER_SECOND},
-		DispatchClass, Weight, WeightToFeeCoefficient, WeightToFeeCoefficients,
-		WeightToFeePolynomial,
+		constants::WEIGHT_PER_SECOND, ConstantMultiplier, DispatchClass, Weight,
+		WeightToFeeCoefficient, WeightToFeeCoefficients, WeightToFeePolynomial,
 	},
 	PalletId,
 };
@@ -51,16 +53,15 @@ use xcm_config::{XcmConfig, XcmOriginToTransactDispatchOrigin};
 pub use sp_runtime::BuildStorage;
 
 // Polkadot Imports
-use polkadot_runtime_common::{BlockHashCount, RocksDbWeight, SlowAdjustingFeeUpdate};
+use polkadot_runtime_common::{BlockHashCount, SlowAdjustingFeeUpdate};
+
+use weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight};
 
 // XCM Imports
 use xcm::latest::prelude::{
 	AccountId32, BodyId, Junction, Junctions, MultiLocation, NetworkId, X1,
 };
 use xcm_executor::XcmExecutor;
-
-/// Import the template pallet.
-pub use pallet_template;
 
 /// Import the donations pallet.
 pub use pallet_donations;
@@ -143,7 +144,7 @@ impl WeightToFeePolynomial for WeightToFee {
 		// in Rococo, extrinsic base weight (smallest non-zero weight) is mapped to 1 MILLIUNIT:
 		// in our template, we map to 1/10 of that, or 1/10 MILLIUNIT
 		let p = MILLIUNIT / 10;
-		let q = 100 * Balance::from(ExtrinsicBaseWeight::get());
+		let q = 100 * Balance::from(ExtrinsicBaseWeight::get().ref_time());
 		smallvec![WeightToFeeCoefficient {
 			degree: 1,
 			negative: false,
@@ -222,7 +223,7 @@ const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(5);
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
 /// We allow for 0.5 of a second of compute with a 12 second average block time.
-const MAXIMUM_BLOCK_WEIGHT: Weight = WEIGHT_PER_SECOND / 2;
+const MAXIMUM_BLOCK_WEIGHT: Weight = WEIGHT_PER_SECOND.saturating_div(2);
 
 /// The version information used to identify this runtime when compiled natively.
 #[cfg(feature = "std")]
@@ -362,9 +363,10 @@ parameter_types! {
 }
 
 impl pallet_transaction_payment::Config for Runtime {
+	type Event = Event;
 	type OnChargeTransaction = pallet_transaction_payment::CurrencyAdapter<Balances, ()>;
-	type TransactionByteFee = TransactionByteFee;
 	type WeightToFee = WeightToFee;
+	type LengthToFee = ConstantMultiplier<Balance, TransactionByteFee>;
 	type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;
 	type OperationalFeeMultiplier = OperationalFeeMultiplier;
 }
@@ -394,6 +396,7 @@ impl pallet_treasury::Config for Runtime {
 	type Currency = Balances;
 	type ApproveOrigin = ApproveOrigin;
 	type RejectOrigin = ApproveOrigin;
+	type SpendOrigin = frame_support::traits::NeverEnsureOrigin<Balance>;
 	type Event = Event;
 	type OnSlash = Treasury;
 	type ProposalBond = ProposalBond;
@@ -411,7 +414,7 @@ parameter_types! {
 	pub const UnsignedPriority: u64 = 99_999_999;
 	pub const OnChainUpdateInterval: BlockNumber = 9;
 	pub const TxnFeePercentage: Percent = Percent::from_percent(10);
-	pub SequesterTransferWeight: Weight = 10_000_000;
+	pub SequesterTransferWeight: Weight = Weight::from_ref_time(10_000_000);
 	pub SequesterTransferFee: Balance = 10_000_000;
 	pub ReserveMultiLocation: MultiLocation = MultiLocation::new(
 		1,
@@ -442,7 +445,6 @@ impl pallet_donations::Config for Runtime {
 	type SequesterTransferWeight = SequesterTransferWeight;
 	type ReserveMultiLocation = ReserveMultiLocation;
 	type SequesterMultiLocation = SequesterMultiLocation;
-	type WeightInfo = ();
 }
 
 pub struct TransactionFeeCalculator<S>(sp_std::marker::PhantomData<S>);
@@ -456,7 +458,7 @@ where
 {
 	fn calculate_fees_from_events(
 		events: Vec<
-			EventRecord<<S as frame_system::Config>::Event, <S as frame_system::Config>::Hash>,
+			Box<EventRecord<<S as frame_system::Config>::Event, <S as frame_system::Config>::Hash>>,
 		>,
 	) -> BalanceOf<S> {
 		let mut curr_block_fee_sum: BalanceOf<S> = Zero::zero();
@@ -468,7 +470,7 @@ where
 		});
 
 		for filtered_event in filtered_events {
-			let treasury_id: AccountId = TreasuryPalletId::get().into_account();
+			let treasury_id: AccountId = TreasuryPalletId::get().into_account_truncating();
 			match filtered_event {
 				<pallet_balances::Event<S>>::Deposit { who, amount } => {
 					if who == treasury_id.into() {
@@ -492,19 +494,20 @@ where
 }
 
 parameter_types! {
-	pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT / 4;
-	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT / 4;
+	pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
+	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
 }
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
 	type Event = Event;
 	type OnSystemEvent = ();
 	type SelfParaId = parachain_info::Pallet<Runtime>;
+	type OutboundXcmpMessageSource = XcmpQueue;
 	type DmpMessageHandler = DmpQueue;
 	type ReservedDmpWeight = ReservedDmpWeight;
-	type OutboundXcmpMessageSource = XcmpQueue;
 	type XcmpMessageHandler = XcmpQueue;
 	type ReservedXcmpWeight = ReservedXcmpWeight;
+	type CheckAssociatedRelayNumber = RelayNumberStrictlyIncreases;
 }
 
 impl parachain_info::Config for Runtime {}
@@ -582,11 +585,6 @@ impl pallet_collator_selection::Config for Runtime {
 	type WeightInfo = ();
 }
 
-/// Configure the pallet template in pallets/template.
-impl pallet_template::Config for Runtime {
-	type Event = Event;
-}
-
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime where
@@ -604,7 +602,7 @@ construct_runtime!(
 
 		// Monetary stuff.
 		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>} = 10,
-		TransactionPayment: pallet_transaction_payment::{Pallet, Storage} = 11,
+		TransactionPayment: pallet_transaction_payment::{Pallet, Storage, Event<T>} = 11,
 		Donations: pallet_donations::{Pallet, Call, Event<T>, ValidateUnsigned} = 12,
 		Treasury: pallet_treasury = 13,
 
@@ -620,9 +618,6 @@ construct_runtime!(
 		PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin, Config} = 31,
 		CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin} = 32,
 		DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>} = 33,
-
-		// Template
-		TemplatePallet: pallet_template::{Pallet, Call, Storage, Event<T>}  = 40,
 	}
 );
 
