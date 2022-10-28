@@ -7,10 +7,13 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+mod weights;
 pub mod xcm_config;
 
 use pallet_donations::FeeCalculator;
 use pallet_treasury::BalanceOf;
+
+use cumulus_pallet_parachain_system::RelayNumberStrictlyIncreases;
 use smallvec::smallvec;
 use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
@@ -21,7 +24,7 @@ use sp_runtime::{
 		IdentifyAccount, Saturating, Verify,
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
-	ApplyExtrinsicResult, MultiSignature, Percent,
+	ApplyExtrinsicResult, MultiSignature,
 };
 
 use sp_std::prelude::*;
@@ -33,9 +36,8 @@ use frame_support::{
 	construct_runtime, parameter_types,
 	traits::Everything,
 	weights::{
-		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_PER_SECOND},
-		DispatchClass, Weight, WeightToFeeCoefficient, WeightToFeeCoefficients,
-		WeightToFeePolynomial,
+		constants::WEIGHT_PER_SECOND, ConstantMultiplier, DispatchClass, Weight,
+		WeightToFeeCoefficient, WeightToFeeCoefficients, WeightToFeePolynomial,
 	},
 	PalletId,
 };
@@ -44,14 +46,16 @@ use frame_system::{
 	EnsureRoot, EventRecord,
 };
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-pub use sp_runtime::{traits::Zero, MultiAddress, Perbill, Permill};
+pub use sp_runtime::{traits::Zero, MultiAddress, Perbill, Percent, Permill};
 use xcm_config::{XcmConfig, XcmOriginToTransactDispatchOrigin};
 
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 
-// Polkadot Imports
-use polkadot_runtime_common::{BlockHashCount, RocksDbWeight, SlowAdjustingFeeUpdate};
+// Polkadot imports
+use polkadot_runtime_common::{BlockHashCount, SlowAdjustingFeeUpdate};
+
+use weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight};
 
 // XCM Imports
 use xcm::latest::prelude::{
@@ -60,9 +64,6 @@ use xcm::latest::prelude::{
 use xcm_executor::XcmExecutor;
 
 /// Import the template pallet.
-pub use pallet_template;
-
-/// Import the donations pallet.
 pub use pallet_donations;
 
 /// Alias to 512-bit hash when used in the context of a transaction signature on the chain.
@@ -143,7 +144,7 @@ impl WeightToFeePolynomial for WeightToFee {
 		// in Rococo, extrinsic base weight (smallest non-zero weight) is mapped to 1 MILLIUNIT:
 		// in our template, we map to 1/10 of that, or 1/10 MILLIUNIT
 		let p = MILLIUNIT / 10;
-		let q = 100 * Balance::from(ExtrinsicBaseWeight::get());
+		let q = 100 * Balance::from(ExtrinsicBaseWeight::get().ref_time());
 		smallvec![WeightToFeeCoefficient {
 			degree: 1,
 			negative: false,
@@ -222,7 +223,7 @@ const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(5);
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
 /// We allow for 0.5 of a second of compute with a 12 second average block time.
-const MAXIMUM_BLOCK_WEIGHT: Weight = WEIGHT_PER_SECOND / 2;
+const MAXIMUM_BLOCK_WEIGHT: Weight = WEIGHT_PER_SECOND.saturating_div(2);
 
 /// The version information used to identify this runtime when compiled natively.
 #[cfg(feature = "std")]
@@ -362,149 +363,29 @@ parameter_types! {
 }
 
 impl pallet_transaction_payment::Config for Runtime {
+	type Event = Event;
 	type OnChargeTransaction = pallet_transaction_payment::CurrencyAdapter<Balances, ()>;
-	type TransactionByteFee = TransactionByteFee;
 	type WeightToFee = WeightToFee;
+	type LengthToFee = ConstantMultiplier<Balance, TransactionByteFee>;
 	type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;
 	type OperationalFeeMultiplier = OperationalFeeMultiplier;
 }
 
 parameter_types! {
-	pub const ProposalBond: Permill = Permill::from_percent(5);
-	pub const ProposalBondMinimum: Balance = 10_000;
-	pub const ProposalBondMaximum: Balance = 50_000;
-	pub const SpendPeriod: BlockNumber = 5;
-	pub const Burn: Permill = Permill::from_percent(0);
-	pub const TreasuryPalletId: PalletId = PalletId(*b"py/trsry");
-
-	pub const TipCountdown: BlockNumber = 1 * DAYS;
-	pub const TipFindersFee: Percent = Percent::from_percent(20);
-	pub const TipReportDepositBase: Balance = 100;
-	pub const DataDepositPerByte: Balance = 1;
-	pub const MaxApprovals: u32 = 100;
-	pub const MaxKeys: u32 = 10_000;
-	pub const MaxPeerInHeartbeats: u32 = 10_000;
-	pub const MaxPeerDataEncodingSize: u32 = 1_000;
-}
-
-type ApproveOrigin = EnsureRoot<AccountId>;
-
-impl pallet_treasury::Config for Runtime {
-	type PalletId = TreasuryPalletId;
-	type Currency = Balances;
-	type ApproveOrigin = ApproveOrigin;
-	type RejectOrigin = ApproveOrigin;
-	type Event = Event;
-	type OnSlash = Treasury;
-	type ProposalBond = ProposalBond;
-	type ProposalBondMinimum = ProposalBondMinimum;
-	type ProposalBondMaximum = ProposalBondMaximum;
-	type SpendPeriod = SpendPeriod;
-	type Burn = Burn;
-	type BurnDestination = ();
-	type SpendFunds = Donations;
-	type MaxApprovals = MaxApprovals;
-	type WeightInfo = ();
-}
-
-parameter_types! {
-	pub const UnsignedPriority: u64 = 99_999_999;
-	pub const OnChainUpdateInterval: BlockNumber = 9;
-	pub const TxnFeePercentage: Percent = Percent::from_percent(10);
-	pub SequesterTransferWeight: Weight = 10_000_000;
-	pub SequesterTransferFee: Balance = 10_000_000;
-	pub ReserveMultiLocation: MultiLocation = MultiLocation::new(
-		1,
-		Junctions::X1(Junction::Parachain(1000)),
-	);
-	pub SequesterMultiLocation: MultiLocation = MultiLocation::new(
-		1,
-		Junctions::X1(Junction::Parachain(9999)),
-	);
-}
-
-pub struct SequesterAccountIdToMultiLocation;
-impl Convert<AccountId, MultiLocation> for SequesterAccountIdToMultiLocation {
-	fn convert(account: AccountId) -> MultiLocation {
-		X1(AccountId32 { network: NetworkId::Any, id: account.into() }).into()
-	}
-}
-
-impl pallet_donations::Config for Runtime {
-	type Event = Event;
-	type BalancesEvent = Event;
-	type UnsignedPriority = UnsignedPriority;
-	type OnChainUpdateInterval = OnChainUpdateInterval;
-	type TxnFeePercentage = TxnFeePercentage;
-	type FeeCalculator = TransactionFeeCalculator<Self>;
-	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
-	type SequesterTransferFee = SequesterTransferFee;
-	type SequesterTransferWeight = SequesterTransferWeight;
-	type ReserveMultiLocation = ReserveMultiLocation;
-	type SequesterMultiLocation = SequesterMultiLocation;
-	type WeightInfo = ();
-}
-
-pub struct TransactionFeeCalculator<S>(sp_std::marker::PhantomData<S>);
-impl<S> FeeCalculator<S> for TransactionFeeCalculator<S>
-where
-	S: pallet_balances::Config + pallet_donations::Config,
-	<S as frame_system::Config>::AccountId: From<AccountId>,
-	<S as frame_system::Config>::AccountId: Into<AccountId>,
-	BalanceOf<S>: From<<S as pallet_balances::Config>::Balance>,
-	BalanceOf<S>: Into<<S as pallet_balances::Config>::Balance>,
-{
-	fn calculate_fees_from_events(
-		events: Vec<
-			EventRecord<<S as frame_system::Config>::Event, <S as frame_system::Config>::Hash>,
-		>,
-	) -> BalanceOf<S> {
-		let mut curr_block_fee_sum: BalanceOf<S> = Zero::zero();
-
-		let filtered_events = events.into_iter().filter_map(|event_record| {
-			let balances_event =
-				<S as pallet_donations::Config>::BalancesEvent::from(event_record.event);
-			balances_event.try_into().ok()
-		});
-
-		for filtered_event in filtered_events {
-			let treasury_id: AccountId = TreasuryPalletId::get().into_account();
-			match filtered_event {
-				<pallet_balances::Event<S>>::Deposit { who, amount } => {
-					if who == treasury_id.into() {
-						curr_block_fee_sum = (curr_block_fee_sum).saturating_add(amount.into());
-					}
-				},
-				_ => {},
-			}
-		}
-
-		curr_block_fee_sum
-	}
-}
-
-impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
-where
-	Call: From<C>,
-{
-	type OverarchingCall = Call;
-	type Extrinsic = UncheckedExtrinsic;
-}
-
-parameter_types! {
-	pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT / 4;
-	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT / 4;
+	pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
+	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
 }
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
 	type Event = Event;
 	type OnSystemEvent = ();
 	type SelfParaId = parachain_info::Pallet<Runtime>;
+	type OutboundXcmpMessageSource = XcmpQueue;
 	type DmpMessageHandler = DmpQueue;
 	type ReservedDmpWeight = ReservedDmpWeight;
-	type OutboundXcmpMessageSource = XcmpQueue;
 	type XcmpMessageHandler = XcmpQueue;
 	type ReservedXcmpWeight = ReservedXcmpWeight;
+	type CheckAssociatedRelayNumber = RelayNumberStrictlyIncreases;
 }
 
 impl parachain_info::Config for Runtime {}
@@ -582,9 +463,127 @@ impl pallet_collator_selection::Config for Runtime {
 	type WeightInfo = ();
 }
 
-/// Configure the pallet template in pallets/template.
-impl pallet_template::Config for Runtime {
+parameter_types! {
+	pub const ProposalBond: Permill = Permill::from_percent(5);
+	pub const ProposalBondMinimum: Balance = 10_000;
+	pub const ProposalBondMaximum: Balance = 50_000;
+	pub const SpendPeriod: BlockNumber = 5;
+	pub const Burn: Permill = Permill::from_percent(0);
+	pub const TreasuryPalletId: PalletId = PalletId(*b"py/trsry");
+
+	pub const TipCountdown: BlockNumber = 1 * DAYS;
+	pub const TipFindersFee: Percent = Percent::from_percent(20);
+	pub const TipReportDepositBase: Balance = 100;
+	pub const DataDepositPerByte: Balance = 1;
+	pub const MaxApprovals: u32 = 100;
+	pub const MaxKeys: u32 = 10_000;
+	pub const MaxPeerInHeartbeats: u32 = 10_000;
+	pub const MaxPeerDataEncodingSize: u32 = 1_000;
+}
+
+type ApproveOrigin = EnsureRoot<AccountId>;
+
+impl pallet_treasury::Config for Runtime {
+	type PalletId = TreasuryPalletId;
+	type Currency = Balances;
+	type ApproveOrigin = ApproveOrigin;
+	type RejectOrigin = ApproveOrigin;
+	type SpendOrigin = frame_support::traits::NeverEnsureOrigin<Balance>;
 	type Event = Event;
+	type OnSlash = Treasury;
+	type ProposalBond = ProposalBond;
+	type ProposalBondMinimum = ProposalBondMinimum;
+	type ProposalBondMaximum = ProposalBondMaximum;
+	type SpendPeriod = SpendPeriod;
+	type Burn = Burn;
+	type BurnDestination = ();
+	type SpendFunds = Donations;
+	type MaxApprovals = MaxApprovals;
+	type WeightInfo = ();
+}
+
+parameter_types! {
+	pub const UnsignedPriority: u64 = 99_999_999;
+	pub const OnChainUpdateInterval: BlockNumber = 9;
+	pub const TxnFeePercentage: Percent = Percent::from_percent(10);
+	pub SequesterTransferWeight: Weight = Weight::from_ref_time(10_000_000);
+	pub SequesterTransferFee: Balance = 10_000_000;
+	pub ReserveMultiLocation: MultiLocation = MultiLocation::new(
+		1,
+		Junctions::X1(Junction::Parachain(1000)),
+	);
+	pub SequesterMultiLocation: MultiLocation = MultiLocation::new(
+		1,
+		Junctions::X1(Junction::Parachain(9999)),
+	);
+}
+
+pub struct SequesterAccountIdToMultiLocation;
+impl Convert<AccountId, MultiLocation> for SequesterAccountIdToMultiLocation {
+	fn convert(account: AccountId) -> MultiLocation {
+		X1(AccountId32 { network: NetworkId::Any, id: account.into() }).into()
+	}
+}
+
+pub struct TransactionFeeCalculator<S>(sp_std::marker::PhantomData<S>);
+impl<S> FeeCalculator<S> for TransactionFeeCalculator<S>
+where
+	S: pallet_balances::Config + pallet_donations::Config,
+	<S as frame_system::Config>::AccountId: From<AccountId>,
+	<S as frame_system::Config>::AccountId: Into<AccountId>,
+	BalanceOf<S>: From<<S as pallet_balances::Config>::Balance>,
+	BalanceOf<S>: Into<<S as pallet_balances::Config>::Balance>,
+{
+	fn calculate_fees_from_events(
+		events: Vec<
+			Box<EventRecord<<S as frame_system::Config>::Event, <S as frame_system::Config>::Hash>>,
+		>,
+	) -> BalanceOf<S> {
+		let mut curr_block_fee_sum: BalanceOf<S> = Zero::zero();
+
+		let filtered_events = events.into_iter().filter_map(|event_record| {
+			let balances_event =
+				<S as pallet_donations::Config>::BalancesEvent::from(event_record.event);
+			balances_event.try_into().ok()
+		});
+
+		for filtered_event in filtered_events {
+			let treasury_id: AccountId = TreasuryPalletId::get().into_account_truncating();
+			match filtered_event {
+				<pallet_balances::Event<S>>::Deposit { who, amount } => {
+					if who == treasury_id.into() {
+						curr_block_fee_sum = (curr_block_fee_sum).saturating_add(amount.into());
+					}
+				},
+				_ => {},
+			}
+		}
+
+		curr_block_fee_sum
+	}
+}
+
+impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
+where
+	Call: From<C>,
+{
+	type OverarchingCall = Call;
+	type Extrinsic = UncheckedExtrinsic;
+}
+
+impl pallet_donations::Config for Runtime {
+	type Event = Event;
+	type BalancesEvent = Event;
+	type UnsignedPriority = UnsignedPriority;
+	type OnChainUpdateInterval = OnChainUpdateInterval;
+	type TxnFeePercentage = TxnFeePercentage;
+	type FeeCalculator = TransactionFeeCalculator<Self>;
+	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
+	type SequesterTransferFee = SequesterTransferFee;
+	type SequesterTransferWeight = SequesterTransferWeight;
+	type ReserveMultiLocation = ReserveMultiLocation;
+	type SequesterMultiLocation = SequesterMultiLocation;
+	type WeightInfo = ();
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -604,7 +603,7 @@ construct_runtime!(
 
 		// Monetary stuff.
 		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>} = 10,
-		TransactionPayment: pallet_transaction_payment::{Pallet, Storage} = 11,
+		TransactionPayment: pallet_transaction_payment::{Pallet, Storage, Event<T>} = 11,
 		Donations: pallet_donations::{Pallet, Call, Event<T>, ValidateUnsigned} = 12,
 		Treasury: pallet_treasury = 13,
 
@@ -621,8 +620,6 @@ construct_runtime!(
 		CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin} = 32,
 		DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>} = 33,
 
-		// Template
-		TemplatePallet: pallet_template::{Pallet, Call, Storage, Event<T>}  = 40,
 	}
 );
 
@@ -638,6 +635,7 @@ mod benches {
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_timestamp, Timestamp]
 		[pallet_collator_selection, CollatorSelection]
+		[pallet_donations, Donations]
 		[cumulus_pallet_xcmp_queue, XcmpQueue]
 	);
 }
@@ -743,6 +741,23 @@ impl_runtime_apis! {
 		}
 	}
 
+	impl pallet_transaction_payment_rpc_runtime_api::TransactionPaymentCallApi<Block, Balance, Call>
+		for Runtime
+	{
+		fn query_call_info(
+			call: Call,
+			len: u32,
+		) -> pallet_transaction_payment::RuntimeDispatchInfo<Balance> {
+			TransactionPayment::query_call_info(call, len)
+		}
+		fn query_call_fee_details(
+			call: Call,
+			len: u32,
+		) -> pallet_transaction_payment::FeeDetails<Balance> {
+			TransactionPayment::query_call_fee_details(call, len)
+		}
+	}
+
 	impl cumulus_primitives_core::CollectCollationInfo<Block> for Runtime {
 		fn collect_collation_info(header: &<Block as BlockT>::Header) -> cumulus_primitives_core::CollationInfo {
 			ParachainSystem::collect_collation_info(header)
@@ -757,8 +772,15 @@ impl_runtime_apis! {
 			(weight, RuntimeBlockWeights::get().max_block)
 		}
 
-		fn execute_block_no_check(block: Block) -> Weight {
-			Executive::execute_block_no_check(block)
+		fn execute_block(block: Block, state_root_check: bool, select: frame_try_runtime::TryStateSelect) -> Weight {
+			log::info!(
+				target: "runtime::parachain-template", "try-runtime: executing block #{} ({:?}) / root checks: {:?} / sanity-checks: {:?}",
+				block.header.number,
+				block.header.hash(),
+				state_root_check,
+				select,
+			);
+			Executive::try_execute_block(block, state_root_check, select).expect("try_execute_block failed")
 		}
 	}
 
