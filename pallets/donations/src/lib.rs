@@ -29,8 +29,7 @@
 //
 // 1) An off-chain worker will run each block. Since fees are customizable on substrate chains,
 // each chain will need custom logic to sum the txn fees. Thus, each block, an offchain
-// worker will iterate through on-chain events and call the FeeCalculator logic passed
-// into the pallet, where txn fees will be parsed on a per-event basis. At the end of each block,
+// worker will iterate through on-chain events, where txn fees will be parsed on a per-event basis. At the end of each block,
 // the sum of txn fees caculated will be added to an off-chain variable storing cumulative txn
 // fees on-chain
 //
@@ -99,7 +98,7 @@ pub mod pallet {
 	#[pallet::config]
 	pub trait Config:
 		frame_system::Config
-		+ pallet_balances::Config
+		+ pallet_transaction_payment::Config
 		+ pallet_treasury::Config
 		+ pallet_xcm::Config
 		+ SendTransactionTypes<Call<Self>>
@@ -109,12 +108,8 @@ pub mod pallet {
 
 		// Type used to convert generic frame events into the
 		// event type specifically emitted by the balances pallet
-		type BalancesEvent: From<<Self as frame_system::Config>::Event>
-			+ TryInto<pallet_balances::Event<Self>>;
-
-		// A struct that calculates your chain’s transaction fees from
-		// the frame_events in a given block
-		type FeeCalculator: FeeCalculator<Self>;
+		type TransactionFeeEvent: From<<Self as frame_system::Config>::Event>
+			+ TryInto<pallet_transaction_payment::Event<Self>>;
 
 		// A standard AccountIdToMultiLocation converter
 		type AccountIdToMultiLocation: Convert<Self::AccountId, MultiLocation>;
@@ -225,16 +220,30 @@ pub mod pallet {
 			seq_pallet_id.into_account_truncating()
 		}
 
-		/// Calculate the fees for a given block.
-		/// since fees are customizable on Substrate chains and each chain has control over where fees are sent
-		/// via the pallet_transaction_payment pallet, each chain also will have to implement its own custom logic
-		/// re: summing the transaction fees. This logic is passed in through the FeeCalculator struct
+		/// Calculate the fees for a given block
 		fn calculate_fees_for_block() -> BalanceOf<T> {
 			let events = <frame_system::Pallet<T>>::read_events_no_consensus();
 
-			let block_fee_sum = <T as Config>::FeeCalculator::calculate_fees_from_events(events);
+			let filtered_events = events.into_iter().filter_map(|event_record| {
+				let balances_event = <T as Config>::TransactionFeeEvent::from(event_record.event);
+				balances_event.try_into().ok()
+			});
 
-			block_fee_sum
+			let mut curr_block_fee_sum: BalanceOf<T> = Zero::zero();
+			for filtered_event in filtered_events {
+				match filtered_event {
+					<pallet_transaction_payment::Event<T>>::TransactionFeePaid {
+						who,
+						actual_fee,
+						tip,
+					} => {
+						curr_block_fee_sum = (curr_block_fee_sum).saturating_add(actual_fee.into());
+					},
+					_ => {},
+				}
+			}
+
+			curr_block_fee_sum
 		}
 
 		/// Updates the offchain storage variable tracking cumulative txn fees by safely adding

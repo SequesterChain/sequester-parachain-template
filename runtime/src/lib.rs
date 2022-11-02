@@ -34,7 +34,7 @@ use sp_version::RuntimeVersion;
 
 use frame_support::{
 	construct_runtime, parameter_types,
-	traits::Everything,
+	traits::{Currency, Everything, Imbalance, OnUnbalanced},
 	weights::{
 		constants::WEIGHT_PER_SECOND, ConstantMultiplier, DispatchClass, Weight,
 		WeightToFeeCoefficient, WeightToFeeCoefficients, WeightToFeePolynomial,
@@ -126,6 +126,10 @@ pub type Executive = frame_executive::Executive<
 	Runtime,
 	AllPalletsWithSystem,
 >;
+
+pub type NegativeImbalance<T> = <pallet_balances::Pallet<T> as Currency<
+	<T as frame_system::Config>::AccountId,
+>>::NegativeImbalance;
 
 /// Handles converting a weight scalar to a fee value, based on the scale and granularity of the
 /// node's balance type.
@@ -362,9 +366,33 @@ parameter_types! {
 	pub const OperationalFeeMultiplier: u8 = 5;
 }
 
+pub struct DealWithFees<R>(sp_std::marker::PhantomData<R>);
+impl<R> OnUnbalanced<NegativeImbalance<R>> for DealWithFees<R>
+where
+	R: pallet_balances::Config + pallet_treasury::Config,
+	pallet_treasury::Pallet<R>: OnUnbalanced<NegativeImbalance<R>>,
+	// <R as frame_system::Config>::AccountId: From<primitives::v2::AccountId>,
+	// <R as frame_system::Config>::AccountId: Into<primitives::v2::AccountId>,
+	<R as frame_system::Config>::Event: From<pallet_balances::Event<R>>,
+{
+	fn on_unbalanceds<B>(mut fees_then_tips: impl Iterator<Item = NegativeImbalance<R>>) {
+		if let Some(fees) = fees_then_tips.next() {
+			// for fees, 80% to treasury, 20% to author
+			let mut split = fees.ration(100, 0);
+			if let Some(tips) = fees_then_tips.next() {
+				// for tips, if any, 100% to author
+				tips.merge_into(&mut split.1);
+			}
+			use pallet_treasury::Pallet as Treasury;
+			<Treasury<R> as OnUnbalanced<_>>::on_unbalanced(split.0);
+		}
+	}
+}
+
 impl pallet_transaction_payment::Config for Runtime {
 	type Event = Event;
-	type OnChargeTransaction = pallet_transaction_payment::CurrencyAdapter<Balances, ()>;
+	type OnChargeTransaction =
+		pallet_transaction_payment::CurrencyAdapter<Balances, DealWithFees<Self>>;
 	type WeightToFee = WeightToFee;
 	type LengthToFee = ConstantMultiplier<Balance, TransactionByteFee>;
 	type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;
@@ -525,44 +553,6 @@ impl Convert<AccountId, MultiLocation> for SequesterAccountIdToMultiLocation {
 	}
 }
 
-pub struct TransactionFeeCalculator<S>(sp_std::marker::PhantomData<S>);
-impl<S> FeeCalculator<S> for TransactionFeeCalculator<S>
-where
-	S: pallet_balances::Config + pallet_donations::Config,
-	<S as frame_system::Config>::AccountId: From<AccountId>,
-	<S as frame_system::Config>::AccountId: Into<AccountId>,
-	BalanceOf<S>: From<<S as pallet_balances::Config>::Balance>,
-	BalanceOf<S>: Into<<S as pallet_balances::Config>::Balance>,
-{
-	fn calculate_fees_from_events(
-		events: Vec<
-			Box<EventRecord<<S as frame_system::Config>::Event, <S as frame_system::Config>::Hash>>,
-		>,
-	) -> BalanceOf<S> {
-		let mut curr_block_fee_sum: BalanceOf<S> = Zero::zero();
-
-		let filtered_events = events.into_iter().filter_map(|event_record| {
-			let balances_event =
-				<S as pallet_donations::Config>::BalancesEvent::from(event_record.event);
-			balances_event.try_into().ok()
-		});
-
-		for filtered_event in filtered_events {
-			let treasury_id: AccountId = TreasuryPalletId::get().into_account_truncating();
-			match filtered_event {
-				<pallet_balances::Event<S>>::Deposit { who, amount } => {
-					if who == treasury_id.into() {
-						curr_block_fee_sum = (curr_block_fee_sum).saturating_add(amount.into());
-					}
-				},
-				_ => {},
-			}
-		}
-
-		curr_block_fee_sum
-	}
-}
-
 impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
 where
 	Call: From<C>,
@@ -573,11 +563,10 @@ where
 
 impl pallet_donations::Config for Runtime {
 	type Event = Event;
-	type BalancesEvent = Event;
+	type TransactionFeeEvent = Event;
 	type UnsignedPriority = UnsignedPriority;
 	type OnChainUpdateInterval = OnChainUpdateInterval;
 	type TxnFeePercentage = TxnFeePercentage;
-	type FeeCalculator = TransactionFeeCalculator<Self>;
 	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
 	type SequesterTransferFee = SequesterTransferFee;
 	type SequesterTransferWeight = SequesterTransferWeight;
