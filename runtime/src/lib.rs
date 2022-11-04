@@ -1,7 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 // `construct_runtime!` does a lot of recursion and requires us to increase the limit to 256.
 #![recursion_limit = "256"]
-#![feature(more_qualified_paths)]
 
 // Make the WASM binary available.
 #[cfg(feature = "std")]
@@ -564,6 +563,7 @@ where
 impl pallet_donations::Config for Runtime {
 	type Event = Event;
 	type TransactionFeeEvent = Event;
+	type BalanceConverter = Balance;
 	type UnsignedPriority = UnsignedPriority;
 	type OnChainUpdateInterval = OnChainUpdateInterval;
 	type TxnFeePercentage = TxnFeePercentage;

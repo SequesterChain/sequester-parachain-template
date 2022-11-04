@@ -41,7 +41,7 @@
 // trait, which will check the on-chain storage for queued txn fees. If txn fees are queued,
 // they will be subsumed into a special Sequester account, and an XCM will be constructed sending
 // the queued funds to the Sequester chain.
-
+#![feature(more_qualified_paths)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
@@ -77,6 +77,7 @@ pub mod pallet {
 		pallet_prelude::*,
 		RawOrigin,
 	};
+	use pallet_transaction_payment::OnChargeTransaction;
 	use pallet_treasury::{BalanceOf, PositiveImbalanceOf};
 	use sp_runtime::{
 		offchain::{
@@ -110,6 +111,9 @@ pub mod pallet {
 		// event type specifically emitted by the balances pallet
 		type TransactionFeeEvent: From<<Self as frame_system::Config>::Event>
 			+ TryInto<pallet_transaction_payment::Event<Self>>;
+
+		type BalanceConverter: From<<<Self as pallet_transaction_payment::Config>::OnChargeTransaction as OnChargeTransaction<Self>>::Balance>
+			+ Into<BalanceOf<Self>>;
 
 		// A standard AccountIdToMultiLocation converter
 		type AccountIdToMultiLocation: Convert<Self::AccountId, MultiLocation>;
@@ -233,11 +237,13 @@ pub mod pallet {
 			for filtered_event in filtered_events {
 				match filtered_event {
 					<pallet_transaction_payment::Event<T>>::TransactionFeePaid {
-						who,
+						who: _,
 						actual_fee,
-						tip,
+						tip: _,
 					} => {
-						curr_block_fee_sum = (curr_block_fee_sum).saturating_add(actual_fee.into());
+						let converted_fee = <T as Config>::BalanceConverter::from(actual_fee);
+						curr_block_fee_sum =
+							(curr_block_fee_sum).saturating_add(converted_fee.into());
 					},
 					_ => {},
 				}
