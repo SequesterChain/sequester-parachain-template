@@ -9,19 +9,13 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 mod weights;
 pub mod xcm_config;
 
-use pallet_donations::FeeCalculator;
-use pallet_treasury::BalanceOf;
-
 use cumulus_pallet_parachain_system::RelayNumberStrictlyIncreases;
 use smallvec::smallvec;
 use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
-	traits::{
-		AccountIdConversion, AccountIdLookup, BlakeTwo256, Block as BlockT, Convert,
-		IdentifyAccount, Saturating, Verify,
-	},
+	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, Convert, IdentifyAccount, Verify},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult, MultiSignature,
 };
@@ -42,7 +36,7 @@ use frame_support::{
 };
 use frame_system::{
 	limits::{BlockLength, BlockWeights},
-	EnsureRoot, EventRecord,
+	EnsureRoot,
 };
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 pub use sp_runtime::{traits::Zero, MultiAddress, Perbill, Percent, Permill};
@@ -531,7 +525,7 @@ impl pallet_treasury::Config for Runtime {
 
 parameter_types! {
 	pub const UnsignedPriority: u64 = 99_999_999;
-	pub const OnChainUpdateInterval: BlockNumber = 9;
+	pub const OnChainUpdateInterval: BlockNumber = 3;
 	pub const TxnFeePercentage: Percent = Percent::from_percent(10);
 	pub SequesterTransferWeight: Weight = Weight::from_ref_time(10_000_000);
 	pub SequesterTransferFee: Balance = 10_000_000;
@@ -593,7 +587,7 @@ construct_runtime!(
 		// Monetary stuff.
 		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>} = 10,
 		TransactionPayment: pallet_transaction_payment::{Pallet, Storage, Event<T>} = 11,
-		Donations: pallet_donations::{Pallet, Call, Event<T>, ValidateUnsigned} = 12,
+		Donations: pallet_donations::{Pallet, Call, Storage, Event<T>, ValidateUnsigned} = 12,
 		Treasury: pallet_treasury = 13,
 
 		// Collator support. The order of these 4 are important and shall not change.
