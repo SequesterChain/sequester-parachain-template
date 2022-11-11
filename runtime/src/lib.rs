@@ -608,6 +608,8 @@ construct_runtime!(
 		// OrmlTokens: orml_tokens::{Pallet, Storage, Event<T>, Config<T>} = 41,
 		// OrmlXcm: orml_xcm::{Pallet, Call, Event<T>} = 42,
 		// UnknownTokens: orml_unknown_tokens::{Pallet, Storage, Event} = 43,
+		XTokens: orml_xtokens::{Pallet, Storage, Call, Event<T>} = 44,
+
 
 
 

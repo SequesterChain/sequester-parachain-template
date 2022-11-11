@@ -5,9 +5,13 @@ use super::{
 use core::marker::PhantomData;
 use frame_support::{
 	log, match_types, parameter_types,
-	traits::{EnsureOrigin, EnsureOriginWithArg, Everything, Nothing},
+	traits::{fungibles, Contains, EnsureOrigin, EnsureOriginWithArg, Everything, Get, Nothing},
 };
-use orml_traits::asset_registry::{AssetMetadata, AssetProcessor};
+use orml_traits::{
+	asset_registry::{AssetMetadata, AssetProcessor},
+	location::AbsoluteReserveProvider,
+	parameter_type_with_key,
+};
 use pallet_xcm::XcmPassthrough;
 use polkadot_parachain::primitives::Sibling;
 use polkadot_runtime_common::impls::ToAuthor;
@@ -22,14 +26,20 @@ use xcm_builder::{
 	UsingComponents,
 };
 
-use sp_runtime::DispatchError;
+use sp_runtime::{traits::Convert, DispatchError};
 
 use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use xcm_executor::{traits::ShouldExecute, XcmExecutor};
 
-use super::Balance;
+use super::{Balance, OrmlAssetRegistry};
 use frame_system::{EnsureRoot, RawOrigin};
+
+use sp_runtime::{
+	traits::{ConstU32, Zero},
+	WeakBoundedVec,
+};
+use xcm::latest::{Junction::GeneralKey, MultiLocation};
 
 parameter_types! {
 	pub const RelayLocation: MultiLocation = MultiLocation::parent();
@@ -245,7 +255,6 @@ pub enum CurrencyId {
 	KAR,
 	MGX,
 	ForeignAsset(ForeignAssetId),
-	Default,
 }
 
 impl Default for CurrencyId {
@@ -333,141 +342,196 @@ impl orml_asset_registry::Config for Runtime {
 	type WeightInfo = ();
 }
 
-// pub type LocalAssetTransactor = MultiCurrencyAdapter<
-// 	Currencies,
-// 	UnknownTokens,
-// 	IsNativeConcrete<CurrencyId, CurrencyIdConvert>,
-// 	AccountId,
-// 	LocationToAccountId,
-// 	CurrencyId,
-// 	CurrencyIdConvert,
-// 	DepositToAlternative<AcalaTreasuryAccount, Currencies, CurrencyId, AccountId, Balance>,
-// >;
+pub mod parachains {
 
-// pub struct CurrencyIdConvert;
-// impl Convert<CurrencyId, Option<MultiLocation>> for CurrencyIdConvert {
-// 	fn convert(id: CurrencyId) -> Option<MultiLocation> {
-// 		use primitives::TokenSymbol::*;
-// 		use CurrencyId::{Erc20, ForeignAsset, LiquidCrowdloan, StableAssetPoolToken, Token};
-// 		match id {
-// 			Token(DOT) => Some(MultiLocation::parent()),
-// 			Token(ACA) | Token(AUSD) | Token(LDOT) | Token(TAP) =>
-// 				Some(native_currency_location(ParachainInfo::get().into(), id.encode())),
-// 			Erc20(address) if !is_system_contract(address) =>
-// 				Some(native_currency_location(ParachainInfo::get().into(), id.encode())),
-// 			LiquidCrowdloan(_lease) =>
-// 				Some(native_currency_location(ParachainInfo::get().into(), id.encode())),
-// 			StableAssetPoolToken(_pool_id) =>
-// 				Some(native_currency_location(ParachainInfo::get().into(), id.encode())),
-// 			ForeignAsset(foreign_asset_id) =>
-// 				AssetIdMaps::<Runtime>::get_multi_location(foreign_asset_id),
-// 			_ => None,
-// 		}
-// 	}
-// }
-// impl Convert<MultiLocation, Option<CurrencyId>> for CurrencyIdConvert {
-// 	fn convert(location: MultiLocation) -> Option<CurrencyId> {
-// 		use primitives::TokenSymbol::*;
-// 		use CurrencyId::{Erc20, LiquidCrowdloan, StableAssetPoolToken, Token};
+	pub mod kusama {
+		pub mod karura {
+			pub const ID: u32 = 2000;
+			pub const KAR_KEY: &[u8] = &[0, 128];
+			pub const AUSD_KEY: &[u8] = &[0, 129];
+		}
+		pub mod mangata {
+			pub const ID: u32 = 2110;
+			pub const MGX_KEY: &[u8] = &[0, 0, 0, 0];
+		}
+		pub mod imbue {
+			pub const ID: u32 = 2121;
+			pub const IMBU_KEY: &[u8] = &[0, 150];
+		}
+	}
+}
 
-// 		if location == MultiLocation::parent() {
-// 			return Some(Token(DOT))
-// 		}
+/// Our FixedConversionRateProvider, used to charge XCM-related fees for tokens registered in
+/// the asset registry that were not already handled by native Trader rules.
+pub struct FixedConversionRateProvider<OrmlAssetRegistry>(PhantomData<OrmlAssetRegistry>);
 
-// 		if let Some(currency_id) = AssetIdMaps::<Runtime>::get_currency_id(location.clone()) {
-// 			return Some(currency_id)
-// 		}
+impl<
+		OrmlAssetRegistry: orml_traits::asset_registry::Inspect<
+			AssetId = CurrencyId,
+			Balance = Balance,
+			CustomMetadata = CustomMetadata,
+		>,
+	> orml_traits::FixedConversionRateProvider for FixedConversionRateProvider<OrmlAssetRegistry>
+{
+	fn get_fee_per_second(location: &MultiLocation) -> Option<u128> {
+		let metadata = OrmlAssetRegistry::metadata_by_location(location)?;
+		metadata.additional.xcm.fee_per_second.or_else(|| Some(1_000))
+	}
+}
 
-// 		match location {
-// 			MultiLocation { parents, interior: X2(Parachain(para_id), GeneralKey(key)) }
-// 				if parents == 1 =>
-// 			{
-// 				match (para_id, &key.into_inner()[..]) {
-// 					(id, key) if id == u32::from(ParachainInfo::get()) => {
-// 						// Acala
-// 						if let Ok(currency_id) = CurrencyId::decode(&mut &*key) {
-// 							// check `currency_id` is cross-chain asset
-// 							match currency_id {
-// 								Token(ACA) | Token(AUSD) | Token(LDOT) | Token(TAP) =>
-// 									Some(currency_id),
-// 								Erc20(address) if !is_system_contract(address) => Some(currency_id),
-// 								LiquidCrowdloan(_lease) => Some(currency_id),
-// 								StableAssetPoolToken(_pool_id) => Some(currency_id),
-// 								_ => None,
-// 							}
-// 						} else {
-// 							// invalid general key
-// 							None
-// 						}
-// 					},
-// 					_ => None,
-// 				}
-// 			},
-// 			// adapt for re-anchor canonical location: https://github.com/paritytech/polkadot/pull/4470
-// 			MultiLocation { parents: 0, interior: X1(GeneralKey(key)) } => {
-// 				let key = &key.into_inner()[..];
-// 				let currency_id = CurrencyId::decode(&mut &*key).ok()?;
-// 				match currency_id {
-// 					Token(ACA) | Token(AUSD) | Token(LDOT) | Token(TAP) => Some(currency_id),
-// 					Erc20(address) if !is_system_contract(address) => Some(currency_id),
-// 					LiquidCrowdloan(_lease) => Some(currency_id),
-// 					StableAssetPoolToken(_pool_id) => Some(currency_id),
-// 					_ => None,
-// 				}
-// 			},
-// 			_ => None,
-// 		}
-// 	}
-// }
-// impl Convert<MultiAsset, Option<CurrencyId>> for CurrencyIdConvert {
-// 	fn convert(asset: MultiAsset) -> Option<CurrencyId> {
-// 		if let MultiAsset { id: Concrete(location), .. } = asset {
-// 			Self::convert(location)
-// 		} else {
-// 			None
-// 		}
-// 	}
-// }
+pub fn general_key(key: &[u8]) -> xcm::latest::Junction {
+	GeneralKey(WeakBoundedVec::<u8, ConstU32<32>>::force_from(key.into(), None))
+}
 
-// parameter_types! {
-// 	pub SelfLocation: MultiLocation = MultiLocation::new(1, X1(Parachain(ParachainInfo::get().into())));
-// }
+/// CurrencyIdConvert
+/// This type implements conversions from our `CurrencyId` type into `MultiLocation` and vice-versa.
+/// A currency locally is identified with a `CurrencyId` variant but in the network it is identified
+/// in the form of a `MultiLocation`, in this case a pair (Para-Id, Currency-Id).
+pub struct CurrencyIdConvert;
 
-// pub struct AccountIdToMultiLocation;
-// impl Convert<AccountId, MultiLocation> for AccountIdToMultiLocation {
-// 	fn convert(account: AccountId) -> MultiLocation {
-// 		X1(AccountId32 { network: NetworkId::Any, id: account.into() }).into()
-// 	}
-// }
+/// Convert an incoming `MultiLocation` into a `CurrencyId` if possible.
+/// Here we need to know the canonical representation of all the tokens we handle in order to
+/// correctly convert their `MultiLocation` representation into our internal `CurrencyId` type.
+impl Convert<MultiLocation, Option<CurrencyId>> for CurrencyIdConvert {
+	fn convert(location: MultiLocation) -> Option<CurrencyId> {
+		if location == MultiLocation::parent() {
+			return Some(CurrencyId::KSM)
+		}
 
-// parameter_types! {
-// 	pub const BaseXcmWeight: Weight = 100_000_000; // TODO: recheck this
-// 	pub const MaxAssetsForTransfer: usize = 2;
-// }
+		match location.clone() {
+			MultiLocation { parents: 0, interior: X1(GeneralKey(key)) } => match &key[..] {
+				parachains::kusama::imbue::IMBU_KEY => Some(CurrencyId::Native),
+				_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+			},
+			MultiLocation { parents: 1, interior: X2(Parachain(para_id), GeneralKey(key)) } =>
+				match para_id {
+					parachains::kusama::karura::ID => match &key[..] {
+						parachains::kusama::karura::AUSD_KEY => Some(CurrencyId::AUSD),
+						parachains::kusama::karura::KAR_KEY => Some(CurrencyId::KAR),
+						parachains::kusama::imbue::IMBU_KEY => Some(CurrencyId::Native),
+						_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+					},
+					parachains::kusama::mangata::ID => match &key[..] {
+						parachains::kusama::mangata::MGX_KEY => Some(CurrencyId::MGX),
+						parachains::kusama::imbue::IMBU_KEY => Some(CurrencyId::Native),
+						_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+					},
 
-// parameter_type_with_key! {
-// 	pub ParachainMinFee: |location: MultiLocation| -> Option<u128> {
-// 		#[allow(clippy::match_ref_pats)] // false positive
-// 		match (location.parents, location.first_interior()) {
-// 			(1, Some(Parachain(parachains::statemint::ID))) => Some(XcmInterface::get_parachain_fee(location.clone())),
-// 			_ => None,
-// 		}
-// 	};
-// }
+					parachains::kusama::imbue::ID => match &key[..] {
+						parachains::kusama::imbue::IMBU_KEY => Some(CurrencyId::Native),
+						_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+					},
 
-// impl orml_xtokens::Config for Runtime {
-// 	type Event = Event;
-// 	type Balance = Balance;
-// 	type CurrencyId = CurrencyId;
-// 	type CurrencyIdConvert = CurrencyIdConvert;
-// 	type AccountIdToMultiLocation = AccountIdToMultiLocation;
-// 	type SelfLocation = SelfLocation;
-// 	type XcmExecutor = XcmExecutor<XcmConfig>;
-// 	type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
-// 	type BaseXcmWeight = BaseXcmWeight;
-// 	type LocationInverter = LocationInverter<Ancestry>;
-// 	type MaxAssetsForTransfer = MaxAssetsForTransfer;
-// 	type MinXcmFee = ParachainMinFee;
-// 	type MultiLocationsFilter = Everything;
-// 	type ReserveProvider = AbsoluteReserveProvider;
-// }
+					id if id == u32::from(ParachainInfo::get()) => match &key[..] {
+						parachains::kusama::imbue::IMBU_KEY => Some(CurrencyId::Native),
+						_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+					},
+					_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+				},
+			_ => OrmlAssetRegistry::location_to_asset_id(location.clone()),
+		}
+	}
+}
+
+impl Convert<MultiAsset, Option<CurrencyId>> for CurrencyIdConvert {
+	fn convert(asset: MultiAsset) -> Option<CurrencyId> {
+		if let MultiAsset { id: Concrete(location), .. } = asset {
+			Self::convert(location)
+		} else {
+			None
+		}
+	}
+}
+
+/// Convert our `CurrencyId` type into its `MultiLocation` representation.
+/// Other chains need to know how this conversion takes place in order to
+/// handle it on their side.
+impl Convert<CurrencyId, Option<MultiLocation>> for CurrencyIdConvert {
+	fn convert(id: CurrencyId) -> Option<MultiLocation> {
+		match id {
+			CurrencyId::KSM => Some(MultiLocation::parent()),
+			CurrencyId::AUSD => Some(MultiLocation::new(
+				1,
+				X2(
+					Parachain(parachains::kusama::karura::ID),
+					general_key(parachains::kusama::karura::AUSD_KEY),
+				),
+			)),
+			CurrencyId::KAR => Some(MultiLocation::new(
+				1,
+				X2(
+					Parachain(parachains::kusama::karura::ID),
+					general_key(parachains::kusama::karura::KAR_KEY),
+				),
+			)),
+			CurrencyId::MGX => Some(MultiLocation::new(
+				1,
+				X2(
+					Parachain(parachains::kusama::mangata::ID),
+					general_key(parachains::kusama::mangata::MGX_KEY),
+				),
+			)),
+			CurrencyId::Native => Some(MultiLocation::new(
+				1,
+				X2(
+					Parachain(ParachainInfo::get().into()),
+					general_key(parachains::kusama::imbue::IMBU_KEY),
+				),
+			)),
+			CurrencyId::ForeignAsset(_) => OrmlAssetRegistry::multilocation(&id).ok()?,
+		}
+	}
+}
+
+parameter_types! {
+	//TODO: we may need to fine tune this value later on
+	pub const BaseXcmWeight: u64 = 100_000_000;
+	pub const MaxAssetsForTransfer: usize = 2;
+}
+
+parameter_type_with_key! {
+	pub ParachainMinFee: |_location: MultiLocation| -> Option<u128> {
+		None
+	};
+}
+
+impl orml_xtokens::Config for Runtime {
+	type Event = Event;
+	type Balance = Balance;
+	type CurrencyId = CurrencyId;
+	type CurrencyIdConvert = CurrencyIdConvert;
+	type AccountIdToMultiLocation = AccountIdToMultiLocation;
+	type SelfLocation = SelfLocation;
+	type XcmExecutor = XcmExecutor<XcmConfig>;
+	type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
+	type BaseXcmWeight = BaseXcmWeight;
+	type LocationInverter = LocationInverter<Ancestry>;
+	type MaxAssetsForTransfer = MaxAssetsForTransfer;
+	type MinXcmFee = ParachainMinFee;
+	type MultiLocationsFilter = Everything;
+	type ReserveProvider = AbsoluteReserveProvider;
+}
+
+parameter_types! {
+	pub SelfLocation: MultiLocation = MultiLocation::new(1, X1(Parachain(ParachainInfo::get().into())));
+}
+
+pub struct AccountIdToMultiLocation;
+impl Convert<AccountId, MultiLocation> for AccountIdToMultiLocation {
+	fn convert(account: AccountId) -> MultiLocation {
+		X1(AccountId32 { network: NetworkId::Any, id: account.into() }).into()
+	}
+}
+
+/// Allow checking in assets that have issuance > 0.
+/// This is defined in cumulus but it doesn't seem made available to the world.
+pub struct NonZeroIssuance<AccountId, Assets>(PhantomData<(AccountId, Assets)>);
+impl<AccountId, Assets> Contains<<Assets as fungibles::Inspect<AccountId>>::AssetId>
+	for NonZeroIssuance<AccountId, Assets>
+where
+	Assets: fungibles::Inspect<AccountId>,
+{
+	fn contains(id: &<Assets as fungibles::Inspect<AccountId>>::AssetId) -> bool {
+		!Assets::total_issuance(*id).is_zero()
+	}
+}
