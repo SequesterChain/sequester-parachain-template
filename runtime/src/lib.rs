@@ -603,6 +603,14 @@ construct_runtime!(
 		CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin} = 32,
 		DmpQueue: cumulus_pallet_dmp_queue::{Pallet, Call, Storage, Event<T>} = 33,
 
+		// ORML
+		OrmlAssetRegistry: orml_asset_registry::{Pallet, Storage, Call, Event<T>, Config<T>} = 40,
+		// OrmlTokens: orml_tokens::{Pallet, Storage, Event<T>, Config<T>} = 41,
+		// OrmlXcm: orml_xcm::{Pallet, Call, Event<T>} = 42,
+		// UnknownTokens: orml_unknown_tokens::{Pallet, Storage, Event} = 43,
+
+
+
 	}
 );
 
