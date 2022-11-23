@@ -40,7 +40,8 @@ use frame_system::{
 };
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 pub use sp_runtime::{traits::Zero, MultiAddress, Perbill, Percent, Permill};
-use xcm_config::{XcmConfig, XcmOriginToTransactDispatchOrigin};
+use xcm_builder::FixedWeightBounds;
+use xcm_config::{MaxInstructions, UnitWeightCost, XcmConfig, XcmOriginToTransactDispatchOrigin};
 
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -526,23 +527,21 @@ impl pallet_treasury::Config for Runtime {
 parameter_types! {
 	pub const UnsignedPriority: u64 = 99_999_999;
 	pub const OnChainUpdateInterval: BlockNumber = 3;
-	pub const TxnFeePercentage: Percent = Percent::from_percent(10);
-	pub SequesterTransferWeight: Weight = Weight::from_ref_time(10_000_000);
-	pub SequesterTransferFee: Balance = 10_000_000;
-	pub ReserveMultiLocation: MultiLocation = MultiLocation::new(
-		1,
-		Junctions::X1(Junction::Parachain(1000)),
-	);
+	pub const TxnFeePercentage: Percent = Percent::from_percent(90);
+	pub SequesterTransferMinimum: Balance = 4_000_000_000;
 	pub SequesterMultiLocation: MultiLocation = MultiLocation::new(
 		1,
-		Junctions::X1(Junction::Parachain(9999)),
+		Junctions::X1(Junction::Parachain(1001)),
 	);
 }
 
 pub struct SequesterAccountIdToMultiLocation;
 impl Convert<AccountId, MultiLocation> for SequesterAccountIdToMultiLocation {
 	fn convert(account: AccountId) -> MultiLocation {
-		X1(AccountId32 { network: NetworkId::Any, id: account.into() }).into()
+		MultiLocation::new(
+			0,
+			Junctions::X1(AccountId32 { network: NetworkId::Any, id: account.into() }),
+		)
 	}
 }
 
@@ -562,9 +561,8 @@ impl pallet_donations::Config for Runtime {
 	type OnChainUpdateInterval = OnChainUpdateInterval;
 	type TxnFeePercentage = TxnFeePercentage;
 	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
-	type SequesterTransferFee = SequesterTransferFee;
-	type SequesterTransferWeight = SequesterTransferWeight;
-	type ReserveMultiLocation = ReserveMultiLocation;
+	type SequesterTransferMinimum = SequesterTransferMinimum;
+	type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
 	type SequesterMultiLocation = SequesterMultiLocation;
 	type WeightInfo = ();
 }

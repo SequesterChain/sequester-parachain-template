@@ -23,7 +23,7 @@ serde = { version = "1.0.144", optional = true, features = ["derive"] }
 smallvec = "1.9.0"
 
 # Local
-pallet-donations = { version = "4.0.0-dev", default-features = false, git = "https://github.com/SequesterChain/pallets.git" }
+pallet-donations = { version = "4.0.0-dev", default-features = false, path = "../../pallets/donations" }
 pallet-treasury = { version = "4.0.0-dev", default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.29" }
 
 # Substrate

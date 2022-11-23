@@ -5183,7 +5183,6 @@ dependencies = [
 [[package]]
 name = "pallet-donations"
 version = "4.0.0-dev"
-source = "git+https://github.com/SequesterChain/pallets.git#bd6c4227e7f26f6d46fea8938929304c87098d30"
 dependencies = [
  "frame-benchmarking",
  "frame-support",
