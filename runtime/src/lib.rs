@@ -52,9 +52,7 @@ use polkadot_runtime_common::{BlockHashCount, SlowAdjustingFeeUpdate};
 use weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight};
 
 // XCM Imports
-use xcm::latest::prelude::{
-	AccountId32, BodyId, Junction, Junctions, MultiLocation, NetworkId, X1,
-};
+use xcm::latest::prelude::{AccountId32, BodyId, Junction, Junctions, MultiLocation, NetworkId};
 use xcm_executor::XcmExecutor;
 
 /// Import the template pallet.
