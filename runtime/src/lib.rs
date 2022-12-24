@@ -40,8 +40,7 @@ use frame_system::{
 };
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 pub use sp_runtime::{traits::Zero, MultiAddress, Perbill, Percent, Permill};
-use xcm_builder::FixedWeightBounds;
-use xcm_config::{MaxInstructions, UnitWeightCost, XcmConfig, XcmOriginToTransactDispatchOrigin};
+use xcm_config::{XcmConfig, XcmOriginToTransactDispatchOrigin};
 
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -560,7 +559,6 @@ impl pallet_donations::Config for Runtime {
 	type TxnFeePercentage = TxnFeePercentage;
 	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
 	type SequesterTransferMinimum = SequesterTransferMinimum;
-	type Weigher = FixedWeightBounds<UnitWeightCost, Call, MaxInstructions>;
 	type SequesterMultiLocation = SequesterMultiLocation;
 	type WeightInfo = ();
 }
