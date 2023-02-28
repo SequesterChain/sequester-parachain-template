@@ -530,6 +530,10 @@ parameter_types! {
 		1,
 		Junctions::X1(Junction::Parachain(1001)),
 	);
+	pub TokenToSendMultiLocation: MultiLocation = MultiLocation::new(
+		1,
+		Junctions::X1(Junction::Parachain(1000)),
+	);
 }
 
 pub struct SequesterAccountIdToMultiLocation;
@@ -560,6 +564,7 @@ impl pallet_donations::Config for Runtime {
 	type AccountIdToMultiLocation = SequesterAccountIdToMultiLocation;
 	type SequesterTransferMinimum = SequesterTransferMinimum;
 	type SequesterMultiLocation = SequesterMultiLocation;
+	type TokenToSendMultiLocation = TokenToSendMultiLocation;
 	type WeightInfo = ();
 }
 
